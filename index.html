@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Block Stacker Timing Game</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #0f0f1a; }
+  canvas { display:block; touch-action: none; }
+  #game-container { position:relative; }
+  #overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; background:rgba(0,0,0,0.7); }
+</style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center py-4 px-3">
+<h1 class="text-2xl font-bold mb-1 text-white">Block Stacker</h1>
+<p class="text-slate-400 text-sm mb-3">Tap/click to stack blocks perfectly!</p>
+
+<!-- Stats -->
+<div class="flex gap-4 mb-3 text-center">
+  <div class="bg-slate-800 rounded-lg px-4 py-2">
+    <div id="score-display" class="text-xl font-bold text-yellow-400">0</div>
+    <div class="text-xs text-slate-400">Score</div>
+  </div>
+  <div class="bg-slate-800 rounded-lg px-4 py-2">
+    <div id="level-display" class="text-xl font-bold text-cyan-400">1</div>
+    <div class="text-xs text-slate-400">Level</div>
+  </div>
+  <div class="bg-slate-800 rounded-lg px-4 py-2">
+    <div id="combo-display" class="text-xl font-bold text-green-400">–</div>
+    <div class="text-xs text-slate-400">Combo</div>
+  </div>
+</div>
+
+<div id="game-container" class="relative">
+  <canvas id="canvas" width="300" height="500" class="rounded-xl shadow-2xl" aria-label="Block Stacker game canvas"></canvas>
+  <div id="overlay">
+    <div id="overlay-content" class="text-center px-6"></div>
+  </div>
+</div>
+
+<!-- High scores -->
+<div class="mt-4 w-full max-w-xs">
+  <h2 class="text-sm font-semibold text-slate-400 mb-2 uppercase tracking-wide text-center">Top 5 High Scores</h2>
+  <div id="high-scores" class="bg-slate-800 rounded-xl overflow-hidden"></div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width;
+const H = canvas.height;
+const BLOCK_H = 20;
+const BASE_WIDTH = W * 0.8;
+const FLOOR_Y = H - BLOCK_H;
+const COLORS = [
+  '#38bdf8','#818cf8','#34d399','#fb923c','#f472b6',
+  '#a78bfa','#4ade80','#fbbf24','#60a5fa','#f87171',
+];
+
+let state = 'title'; // title | playing | gameover
+let blocks = [];     // {x, y, w, color}
+let moving = {x:0, dir:1, w:0, speed:0, color:''};
+let score = 0, level = 1, combo = 0;
+let animId = null;
+let perfectFlash = 0;
+let scoreFloat = null; // {x,y,text,alpha}
+
+function initGame() {
+  blocks = [];
+  score = 0; level = 1; combo = 0;
+  // Place base block
+  const baseBlock = { x: (W - BASE_WIDTH) / 2, y: FLOOR_Y, w: BASE_WIDTH, color: '#64748b' };
+  blocks.push(baseBlock);
+  nextBlock();
+  updateStats();
+}
+
+function nextBlock() {
+  const prev = blocks[blocks.length - 1];
+  const blockW = prev.w;
+  const speed = 2.5 + (level - 1) * 0.35;
+  const color = COLORS[(blocks.length) % COLORS.length];
+  moving = {
+    x: 0,
+    dir: 1,
+    w: blockW,
+    speed: speed,
+    color: color,
+    y: 30
+  };
+}
+
+function drop() {
+  if (state !== 'playing') return;
+  const prev = blocks[blocks.length - 1];
+  const mx = moving.x;
+  const mw = moving.w;
+  const px = prev.x;
+  const pw = prev.w;
+  // Calculate overlap
+  const left = Math.max(mx, px);
+  const right = Math.min(mx + mw, px + pw);
+  const overlap = right - left;
+  if (overlap <= 0) { gameOver(); return; }
+  const isPerfect = Math.abs(overlap - pw) < 2;
+  const newW = isPerfect ? pw : overlap;
+  const newX = isPerfect ? px : left;
+  const newY = prev.y - BLOCK_H;
+  if (isPerfect) {
+    combo++;
+    score += 10 + combo * 5;
+    perfectFlash = 20;
+    scoreFloat = { x: newX + newW/2, y: newY - 10, text: 'PERFECT! +' + (10+combo*5), alpha: 1.0 };
+  } else {
+    combo = 0;
+    score += Math.round(overlap / mw * 10);
+    scoreFloat = { x: newX + newW/2, y: newY - 10, text: '+' + Math.round(overlap/mw*10), alpha: 1.0 };
+  }
+  level = Math.floor(blocks.length / 5) + 1;
+  blocks.push({ x: newX, y: newY, w: newW, color: moving.color });
+  // Win? (reached top)
+  if (newY <= 30) { gameOver(true); return; }
+  nextBlock();
+  updateStats();
+}
+
+function updateStats() {
+  document.getElementById('score-display').textContent = score;
+  document.getElementById('level-display').textContent = level;
+  document.getElementById('combo-display').textContent = combo > 1 ? 'x'+combo : '–';
+}
+
+function gameLoop() {
+  if (state !== 'playing') return;
+  // Move block
+  moving.x += moving.dir * moving.speed;
+  if (moving.x + moving.w >= W) { moving.x = W - moving.w; moving.dir = -1; }
+  if (moving.x <= 0) { moving.x = 0; moving.dir = 1; }
+  draw();
+  if (perfectFlash > 0) perfectFlash--;
+  if (scoreFloat) { scoreFloat.y -= 0.5; scoreFloat.alpha -= 0.025; if (scoreFloat.alpha <= 0) scoreFloat = null; }
+  animId = requestAnimationFrame(gameLoop);
+}
+
+function draw() {
+  // Background gradient
+  const grad = ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0,'#0f0f1a');
+  grad.addColorStop(1,'#1e1b4b');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0,0,W,H);
+
+  // Draw placed blocks
+  blocks.forEach((b, i) => {
+    const grd = ctx.createLinearGradient(b.x, b.y, b.x + b.w, b.y + BLOCK_H);
+    grd.addColorStop(0, b.color);
+    grd.addColorStop(1, shadeColor(b.color, -20));
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.roundRect(b.x + 1, b.y + 1, b.w - 2, BLOCK_H - 1, 3);
+    ctx.fill();
+    // Shine
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(b.x + 2, b.y + 2, b.w - 4, 4);
+  });
+
+  // Draw moving block
+  if (perfectFlash > 0) {
+    ctx.fillStyle = 'rgba(255,255,100,' + (perfectFlash / 20 * 0.5) + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
+  const grd2 = ctx.createLinearGradient(moving.x, moving.y, moving.x + moving.w, moving.y + BLOCK_H);
+  grd2.addColorStop(0, moving.color);
+  grd2.addColorStop(1, shadeColor(moving.color, -30));
+  ctx.fillStyle = grd2;
+  ctx.beginPath();
+  ctx.roundRect(moving.x + 1, moving.y + 1, moving.w - 2, BLOCK_H - 1, 3);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(moving.x + 0.5, moving.y + 0.5, moving.w - 1, BLOCK_H - 0.5, 3);
+  ctx.stroke();
+
+  // Guide line (dashed) from center of previous block
+  const prev = blocks[blocks.length - 1];
+  ctx.setLineDash([3,4]);
+  ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(prev.x, moving.y + BLOCK_H);
+  ctx.lineTo(prev.x, prev.y);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(prev.x + prev.w, moving.y + BLOCK_H);
+  ctx.lineTo(prev.x + prev.w, prev.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Score float
+  if (scoreFloat) {
+    ctx.globalAlpha = scoreFloat.alpha;
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = '#fbbf24';
+    ctx.textAlign = 'center';
+    ctx.fillText(scoreFloat.text, scoreFloat.x, scoreFloat.y);
+    ctx.globalAlpha = 1;
+  }
+
+  // Height indicator
+  const heightPct = 1 - (blocks.length * BLOCK_H) / H;
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  ctx.fillRect(W - 8, 0, 6, H);
+  ctx.fillStyle = '#818cf8';
+  ctx.fillRect(W - 8, heightPct * H, 6, (1 - heightPct) * H);
+}
+
+function shadeColor(hex, amount) {
+  const num = parseInt(hex.slice(1), 16);
+  const r = Math.min(255, Math.max(0, (num >> 16) + amount));
+  const g = Math.min(255, Math.max(0, ((num >> 8) & 0xff) + amount));
+  const b = Math.min(255, Math.max(0, (num & 0xff) + amount));
+  return '#' + [r,g,b].map(x=>x.toString(16).padStart(2,'0')).join('');
+}
+
+function gameOver(won) {
+  state = 'gameover';
+  cancelAnimationFrame(animId);
+  saveHighScore(score, blocks.length - 1);
+  renderHighScores();
+  updateStats();
+  showOverlay(won);
+}
+
+function showOverlay(won) {
+  const el = document.getElementById('overlay-content');
+  el.innerHTML = '';
+  const title = document.createElement('h2');
+  title.className = 'text-3xl font-bold text-white mb-2';
+  title.textContent = won ? '🏆 Amazing!' : 'Game Over';
+  const scoreTxt = document.createElement('p');
+  scoreTxt.className = 'text-slate-300 mb-1';
+  scoreTxt.textContent = 'Score: ' + score;
+  const levelTxt = document.createElement('p');
+  levelTxt.className = 'text-slate-400 text-sm mb-4';
+  levelTxt.textContent = 'Blocks stacked: ' + (blocks.length - 1) + ' | Level: ' + level;
+  const btn = document.createElement('button');
+  btn.className = 'px-8 py-3 bg-indigo-500 text-white font-bold rounded-xl hover:bg-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-300 text-lg';
+  btn.textContent = 'Play Again';
+  btn.setAttribute('aria-label', 'Play again');
+  btn.addEventListener('click', startGame);
+  el.appendChild(title); el.appendChild(scoreTxt); el.appendChild(levelTxt); el.appendChild(btn);
+  document.getElementById('overlay').style.display = 'flex';
+}
+
+function showTitleOverlay() {
+  const el = document.getElementById('overlay-content');
+  el.innerHTML = '';
+  const title = document.createElement('h2');
+  title.className = 'text-3xl font-bold text-white mb-2';
+  title.textContent = '🧱 Block Stacker';
+  const desc = document.createElement('p');
+  desc.className = 'text-slate-400 text-sm mb-6 max-w-xs text-center';
+  desc.textContent = 'Tap or click to drop the moving block. Stack as high as you can! Perfect alignment gives bonus points.';
+  const btn = document.createElement('button');
+  btn.className = 'px-8 py-3 bg-indigo-500 text-white font-bold rounded-xl hover:bg-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-300 text-lg';
+  btn.textContent = 'Start Game';
+  btn.setAttribute('aria-label', 'Start game');
+  btn.addEventListener('click', startGame);
+  el.appendChild(title); el.appendChild(desc); el.appendChild(btn);
+  document.getElementById('overlay').style.display = 'flex';
+}
+
+function startGame() {
+  document.getElementById('overlay').style.display = 'none';
+  state = 'playing';
+  cancelAnimationFrame(animId);
+  initGame();
+  gameLoop();
+}
+
+// Input
+canvas.addEventListener('click', drop);
+canvas.addEventListener('touchstart', e => { e.preventDefault(); drop(); }, {passive:false});
+document.addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'ArrowDown') { e.preventDefault(); drop(); } });
+
+// High scores
+function saveHighScore(s, blocks) {
+  let hs = [];
+  try { hs = JSON.parse(localStorage.getItem('stacker_hs') || '[]'); } catch(_) {}
+  hs.push({ score: s, blocks, date: new Date().toLocaleDateString() });
+  hs.sort((a,b) => b.score - a.score);
+  hs = hs.slice(0, 5);
+  try { localStorage.setItem('stacker_hs', JSON.stringify(hs)); } catch(_) {}
+}
+
+function renderHighScores() {
+  let hs = [];
+  try { hs = JSON.parse(localStorage.getItem('stacker_hs') || '[]'); } catch(_) {}
+  const el = document.getElementById('high-scores');
+  el.innerHTML = '';
+  if (!hs.length) {
+    const p = document.createElement('p');
+    p.className = 'text-slate-500 text-sm p-4 text-center';
+    p.textContent = 'No scores yet!';
+    el.appendChild(p);
+    return;
+  }
+  hs.forEach((h, i) => {
+    const row = document.createElement('div');
+    row.className = 'flex justify-between items-center px-4 py-2 ' + (i%2?'bg-slate-700':'bg-slate-800');
+    const rank = document.createElement('span');
+    rank.className = 'text-slate-300 font-bold text-sm';
+    rank.textContent = ['🥇','🥈','🥉','4','5'][i] || i+1;
+    const scoreEl = document.createElement('span');
+    scoreEl.className = 'text-yellow-400 font-bold';
+    scoreEl.textContent = h.score;
+    const meta = document.createElement('span');
+    meta.className = 'text-slate-500 text-xs';
+    meta.textContent = h.blocks + ' blocks · ' + h.date;
+    row.appendChild(rank); row.appendChild(scoreEl); row.appendChild(meta);
+    el.appendChild(row);
+  });
+}
+
+// CanvasRenderingContext2D.roundRect polyfill
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+    this.beginPath();
+    this.moveTo(x + r, y);
+    this.lineTo(x + w - r, y);
+    this.quadraticCurveTo(x + w, y, x + w, y + r);
+    this.lineTo(x + w, y + h - r);
+    this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    this.lineTo(x + r, y + h);
+    this.quadraticCurveTo(x, y + h, x, y + h - r);
+    this.lineTo(x, y + r);
+    this.quadraticCurveTo(x, y, x + r, y);
+    this.closePath();
+  };
+}
+
+renderHighScores();
+showTitleOverlay();
+</script>
+</body>
+</html>
